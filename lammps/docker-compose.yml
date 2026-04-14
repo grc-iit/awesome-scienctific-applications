@@ -1,0 +1,118 @@
+# LAMMPS simulated cluster — build, single-node, and multi-node tests.
+#
+# Single-node (4 ranks, 1 container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sci-lammps:latest
+    command:
+      - bash
+      - -c
+      - |
+        mpirun -np 4 --oversubscribe --allow-run-as-root \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            /opt/lammps/build/lmp \
+            -k on g 1 -sf kk -pk kokkos cuda/aware off \
+            -in /opt/lammps/bench/in.lj -log /output/lammps_single.log && \
+        grep -q 'Loop time' /output/lammps_single.log && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  head:
+    image: sci-lammps:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        mpirun -np 3 --allow-run-as-root \
+            --host head:1,worker1:1,worker2:1 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            /opt/lammps/build/lmp \
+            -k on g 1 -sf kk -pk kokkos cuda/aware off \
+            -in /opt/lammps/bench/in.lj -log /output/lammps_cluster.log && \
+        grep -q 'Loop time' /output/lammps_cluster.log && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker1:
+    image: sci-lammps:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker2:
+    image: sci-lammps:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

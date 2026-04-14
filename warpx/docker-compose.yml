@@ -1,0 +1,122 @@
+# WarpX simulated cluster — build, single-node, and multi-node tests.
+#
+# Single-node (2 ranks, 1 container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sci-warpx:latest
+    working_dir: /opt/warpx/Examples/Physics_applications/laser_acceleration
+    command:
+      - bash
+      - -c
+      - |
+        mpirun -np 2 --oversubscribe --allow-run-as-root \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            /opt/warpx/build/bin/warpx.3d.MPI.CUDA.SP.PSP.OPMD.EB.QED \
+            inputs_base_3d \
+            max_step=5 amr.n_cell=32 32 64 amr.max_grid_size=32 \
+            diag1.intervals=5 diag1.file_prefix=/output/diag1 && \
+        ls /output/ && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  head:
+    image: sci-warpx:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    working_dir: /opt/warpx/Examples/Physics_applications/laser_acceleration
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        mpirun -np 3 --allow-run-as-root \
+            --host head:1,worker1:1,worker2:1 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            /opt/warpx/build/bin/warpx.3d.MPI.CUDA.SP.PSP.OPMD.EB.QED \
+            inputs_base_3d \
+            max_step=5 amr.n_cell=32 32 64 amr.max_grid_size=32 \
+            diag1.intervals=5 diag1.file_prefix=/output/diag1 && \
+        ls /output/ && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker1:
+    image: sci-warpx:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker2:
+    image: sci-warpx:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

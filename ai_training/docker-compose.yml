@@ -1,0 +1,95 @@
+# AI Training simulated cluster — build, single-node, and multi-node tests.
+#
+# Uses torchrun (c10d rendezvous) rather than MPI+SSH.
+# All 3 nodes start simultaneously and rendezvous through node0:29500.
+#
+# Single-node (1 GPU):
+#   docker compose run --rm validate
+#
+# Multi-node (3 nodes via torchrun):
+#   docker compose up --abort-on-container-exit --exit-code-from node0
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sci-ai-training:latest
+    command: python3 /opt/train_example.py --epochs 3 --batch 64
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  node0:
+    image: sci-ai-training:latest
+    hostname: node0
+    command: >
+      torchrun
+        --nnodes=3 --nproc_per_node=1
+        --node_rank=0
+        --master_addr=node0
+        --master_port=29500
+        --rdzv_backend=c10d
+        --rdzv_endpoint=node0:29500
+        /opt/train_example.py --epochs 3
+    networks:
+      - train-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  node1:
+    image: sci-ai-training:latest
+    hostname: node1
+    command: >
+      torchrun
+        --nnodes=3 --nproc_per_node=1
+        --node_rank=1
+        --master_addr=node0
+        --master_port=29500
+        --rdzv_backend=c10d
+        --rdzv_endpoint=node0:29500
+        /opt/train_example.py --epochs 3
+    networks:
+      - train-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  node2:
+    image: sci-ai-training:latest
+    hostname: node2
+    command: >
+      torchrun
+        --nnodes=3 --nproc_per_node=1
+        --node_rank=2
+        --master_addr=node0
+        --master_port=29500
+        --rdzv_backend=c10d
+        --rdzv_endpoint=node0:29500
+        /opt/train_example.py --epochs 3
+    networks:
+      - train-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  train-net:

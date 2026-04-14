@@ -1,0 +1,117 @@
+# Nyx simulated cluster — build, single-node, and multi-node tests.
+#
+# Single-node (2 ranks, 1 container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sci-nyx:latest
+    command:
+      - bash
+      - -c
+      - |
+        cd /opt/Nyx/Exec/HydroTests && \
+        mpirun -np 2 --oversubscribe --allow-run-as-root \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            /opt/Nyx/build/Exec/HydroTests/nyx_HydroTests \
+            inputs.regtest.sedov && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  head:
+    image: sci-nyx:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        mkdir -p /output && \
+        mpirun -np 3 --allow-run-as-root \
+            --host head:1,worker1:1,worker2:1 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            /opt/Nyx/build/Exec/HydroTests/nyx_HydroTests \
+            /opt/Nyx/Exec/HydroTests/inputs.regtest.sedov \
+            amr.plot_file=/output/plt amr.check_file=/output/chk \
+            max_step=3 && \
+        ls /output/ && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker1:
+    image: sci-nyx:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker2:
+    image: sci-nyx:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  mpi-net:
+
+volumes:
+  output:
