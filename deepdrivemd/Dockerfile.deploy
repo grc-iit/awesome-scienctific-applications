@@ -1,0 +1,34 @@
+# DeepDriveMD deployment image — copies the prebuilt venv, DDMD source,
+# benchmark inputs, and config template/driver.
+# Requires sci-deepdrivemd:latest to exist before building this image.
+#
+# Build:
+#   docker build -t sci-deepdrivemd        -f Dockerfile        .
+#   docker build -t sci-deepdrivemd-deploy -f Dockerfile.deploy .
+
+FROM sci-deepdrivemd:latest AS builder
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-venv \
+        libgomp1 \
+        openssh-server openssh-client \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/ddmd-env              /opt/ddmd-env
+COPY --from=builder /opt/DeepDriveMD           /opt/DeepDriveMD
+COPY --from=builder /opt/ddmd-bench            /opt/ddmd-bench
+COPY --from=builder /opt/deepdrivemd.template.yaml /opt/deepdrivemd.template.yaml
+COPY --from=builder /opt/run_ddmd.sh           /opt/run_ddmd.sh
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV PATH=/opt/ddmd-env/bin:${PATH}
+
+EXPOSE 22
+CMD ["/bin/bash"]
