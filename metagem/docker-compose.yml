@@ -1,0 +1,88 @@
+# metaGEM simulated cluster — build, single-node, multi-node tests.
+#
+# Single-node (toy dataset, qfilter target, one container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (three independent workdirs across head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-metagem-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        /opt/run_metagem.sh /output/run && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-metagem-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        # Fan out three independent qfilter runs across the cluster.
+        /opt/run_metagem.sh /output/head &
+        ssh -o StrictHostKeyChecking=no worker1 \
+          "/opt/run_metagem.sh /output/worker1" &
+        ssh -o StrictHostKeyChecking=no worker2 \
+          "/opt/run_metagem.sh /output/worker2" &
+        wait && \
+        find /output/head/qfiltered    -name '*_R1.fastq.gz' -print -quit | grep -q . && \
+        find /output/worker1/qfiltered -name '*_R1.fastq.gz' -print -quit | grep -q . && \
+        find /output/worker2/qfiltered -name '*_R1.fastq.gz' -print -quit | grep -q . && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-metagem-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-metagem-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

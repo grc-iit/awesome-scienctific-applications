@@ -1,0 +1,91 @@
+# V-pipe simulated cluster — build, single-node, multi-node tests.
+#
+# Single-node (SARS-CoV-2 test data, Snakemake + --use-conda):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (SARS-CoV-2 on head, HIV on worker1, SARS-CoV-2 on worker2):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+#
+# NOTE: first run materialises V-pipe's per-rule conda envs; expect an
+# extra 5-10 minutes of solve time before the actual pipeline starts.
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-vpipe-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        /opt/run_vpipe.sh sars-cov-2 /output/run && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-vpipe-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        # Fan out distinct V-pipe runs across head + 2 workers.
+        /opt/run_vpipe.sh sars-cov-2 /output/head &
+        ssh -o StrictHostKeyChecking=no worker1 \
+          "/opt/run_vpipe.sh hiv        /output/worker1" &
+        ssh -o StrictHostKeyChecking=no worker2 \
+          "/opt/run_vpipe.sh sars-cov-2 /output/worker2" &
+        wait && \
+        find /output/head    -path '*/results/*' -type f -print -quit | grep -q . && \
+        find /output/worker1 -path '*/results/*' -type f -print -quit | grep -q . && \
+        find /output/worker2 -path '*/results/*' -type f -print -quit | grep -q . && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-vpipe-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-vpipe-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

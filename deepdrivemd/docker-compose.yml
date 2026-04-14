@@ -1,0 +1,92 @@
+# DeepDriveMD simulated cluster — build, single-node, multi-node tests.
+#
+# Single-node (1 iteration × 1 task, /bin/echo placeholders):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (three independent experiments fanned out over SSH):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+#
+# Each container runs a complete DDMD pipeline with `resource:
+# local.localhost`. RADICAL-EnTK has no first-class concept for spanning
+# physical nodes in the way MPI does — cross-node parallelism is expressed
+# here as independent experiments on each worker.
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-deepdrivemd-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        /opt/run_ddmd.sh /output/exp_small 1 1 && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-deepdrivemd-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        /opt/run_ddmd.sh /output/head    1 1 &
+        ssh -o StrictHostKeyChecking=no worker1 \
+          "/opt/run_ddmd.sh /output/worker1 1 1" &
+        ssh -o StrictHostKeyChecking=no worker2 \
+          "/opt/run_ddmd.sh /output/worker2 2 4" &
+        wait && \
+        find /output/head    -type d -name 'stage*' -print -quit | grep -q . && \
+        find /output/worker1 -type d -name 'stage*' -print -quit | grep -q . && \
+        find /output/worker2 -type d -name 'stage*' -print -quit | grep -q . && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-deepdrivemd-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-deepdrivemd-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:
