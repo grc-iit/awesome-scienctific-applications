@@ -1,0 +1,88 @@
+# Montage simulated cluster — build, single-node, and multi-node tests.
+#
+# Single-node (10-step pipeline on one container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (mProjExec fanned out over head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-montage-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        /opt/run_mosaic.sh \
+            /opt/montage-bench/raw_images \
+            /opt/montage-bench/region.hdr \
+            /output && \
+        test -s /output/mosaic.fits && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-montage-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        /opt/run_mosaic.sh \
+            /opt/montage-bench/raw_images \
+            /opt/montage-bench/region.hdr \
+            /output \
+            head,worker1,worker2 && \
+        test -s /output/mosaic.fits && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-montage-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-montage-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

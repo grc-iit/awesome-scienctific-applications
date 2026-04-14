@@ -1,0 +1,88 @@
+# biobb_wf_md_setup simulated cluster — build, single-node, multi-node tests.
+#
+# Single-node (one PDB, 5 steps, one container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (PDBs sharded across head + 2 workers over SSH):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-biobb-md-setup-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        /opt/run_md_setup.py \
+            /opt/biobb-bench/1AKI.pdb \
+            /output/1AKI && \
+        test -s /output/1AKI/1AKI_solvate.gro && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-biobb-md-setup-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        # Populate a small multi-PDB set by duplicating 1AKI into 3 copies
+        # (stand-in for the bare-metal medium scale which uses 8 structures).
+        mkdir -p /output/pdbs /output/runs && \
+        for tag in 1AKI_a 1AKI_b 1AKI_c; do
+          cp /opt/biobb-bench/1AKI.pdb /output/pdbs/${tag}.pdb
+        done && \
+        /opt/run_batch.sh /output/pdbs /output/runs head,worker1,worker2 && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-biobb-md-setup-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-biobb-md-setup-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

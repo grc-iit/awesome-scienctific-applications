@@ -1,0 +1,35 @@
+# biobb_wf_md_setup deployment image — copies the conda env, benchmark PDB,
+# and pipeline drivers from the builder image.
+# Requires sci-biobb-md-setup:latest to exist before building this image.
+#
+# Build:
+#   docker build -t sci-biobb-md-setup        -f Dockerfile        .
+#   docker build -t sci-biobb-md-setup-deploy -f Dockerfile.deploy .
+
+FROM sci-biobb-md-setup:latest AS builder
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        openssh-server openssh-client \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-built conda env (Python 3.10 + GROMACS + biobb) — self-contained.
+COPY --from=builder /opt/biobb-env      /opt/biobb-env
+
+# Benchmark input and pipeline drivers
+COPY --from=builder /opt/biobb-bench    /opt/biobb-bench
+COPY --from=builder /opt/run_md_setup.py /opt/run_md_setup.py
+COPY --from=builder /opt/run_batch.sh   /opt/run_batch.sh
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV PATH=/opt/biobb-env/bin:${PATH}
+
+EXPOSE 22
+CMD ["/bin/bash"]
