@@ -14,8 +14,8 @@ services:
   validate:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: sci-ai-training:latest
+      dockerfile: Dockerfile.deploy
+    image: sci-ai-training-deploy:latest
     command: python3 /opt/train_example.py --epochs 3 --batch 64
     deploy:
       resources:
@@ -26,7 +26,7 @@ services:
               capabilities: [gpu]
 
   node0:
-    image: sci-ai-training:latest
+    image: sci-ai-training-deploy:latest
     hostname: node0
     command: >
       torchrun
@@ -48,7 +48,7 @@ services:
               capabilities: [gpu]
 
   node1:
-    image: sci-ai-training:latest
+    image: sci-ai-training-deploy:latest
     hostname: node1
     command: >
       torchrun
@@ -70,7 +70,7 @@ services:
               capabilities: [gpu]
 
   node2:
-    image: sci-ai-training:latest
+    image: sci-ai-training-deploy:latest
     hostname: node2
     command: >
       torchrun

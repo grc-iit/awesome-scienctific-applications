@@ -1,0 +1,42 @@
+# VPIC-Kokkos deployment image — copies pre-built libraries and deck compiler,
+# avoids recompiling Kokkos/VPIC.
+# Requires sci-vpic:latest to exist before building this image.
+#
+# NOTE: The VPIC deck compiler (build/bin/vpic) invokes nvcc at runtime to
+# compile physics decks into executables, so this image retains the CUDA devel
+# layer. Only Kokkos/VPIC themselves are not recompiled.
+#
+# Build:
+#   docker build -t sci-vpic          -f Dockerfile       .
+#   docker build -t sci-vpic-deploy   -f Dockerfile.deploy .
+
+FROM sci-vpic:latest AS builder
+
+FROM nvidia/cuda:12.6.0-devel-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ openmpi-bin libopenmpi3 libopenmpi-dev \
+        openssh-server openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-built VPIC-Kokkos tree: libraries, deck compiler script, and nvcc_wrapper
+COPY --from=builder /opt/vpic-kokkos/build  /opt/vpic-kokkos/build
+COPY --from=builder /opt/vpic-kokkos/kokkos /opt/vpic-kokkos/kokkos
+
+# deck/ and src/ are compiled by the vpic deck compiler at runtime
+COPY --from=builder /opt/vpic-kokkos/deck   /opt/vpic-kokkos/deck
+COPY --from=builder /opt/vpic-kokkos/src    /opt/vpic-kokkos/src
+
+# Sample decks (used by docker-compose tests)
+COPY --from=builder /opt/vpic-kokkos/sample /opt/vpic-kokkos/sample
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV NVCC_WRAPPER_DEFAULT_COMPILER=g++
+ENV PATH=/opt/vpic-kokkos/build/bin:${PATH}
+
+EXPOSE 22
+CMD ["/bin/bash"]

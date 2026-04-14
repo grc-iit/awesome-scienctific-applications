@@ -1,0 +1,37 @@
+# WarpX deployment image — runtime-only, no recompilation.
+# Copies the pre-built WarpX binaries from the builder image.
+# Requires sci-warpx:latest to exist before building this image.
+#
+# Build:
+#   docker build -t sci-warpx          -f Dockerfile       .
+#   docker build -t sci-warpx-deploy   -f Dockerfile.deploy .
+
+FROM sci-warpx:latest AS builder
+
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openmpi-bin libopenmpi3 \
+        openssh-server openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Parallel HDF5 runtime libraries
+COPY --from=builder /opt/hdf5/lib /opt/hdf5/lib
+
+# WarpX binaries
+COPY --from=builder /opt/warpx/build/bin /opt/warpx/build/bin
+
+# Example input files (used by docker-compose tests)
+COPY --from=builder /opt/warpx/Examples /opt/warpx/Examples
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV HDF5_ROOT=/opt/hdf5
+ENV LD_LIBRARY_PATH=/opt/hdf5/lib:${LD_LIBRARY_PATH}
+ENV PATH=/opt/warpx/build/bin:${PATH}
+
+EXPOSE 22
+CMD ["/bin/bash"]

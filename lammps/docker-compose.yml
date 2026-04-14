@@ -11,8 +11,8 @@ services:
   validate:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: sci-lammps:latest
+      dockerfile: Dockerfile.deploy
+    image: sci-lammps-deploy:latest
     command:
       - bash
       - -c
@@ -35,7 +35,7 @@ services:
               capabilities: [gpu]
 
   head:
-    image: sci-lammps:latest
+    image: sci-lammps-deploy:latest
     hostname: head
     depends_on:
       worker1:
@@ -68,7 +68,7 @@ services:
               capabilities: [gpu]
 
   worker1:
-    image: sci-lammps:latest
+    image: sci-lammps-deploy:latest
     hostname: worker1
     command: /usr/sbin/sshd -D
     healthcheck:
@@ -90,7 +90,7 @@ services:
               capabilities: [gpu]
 
   worker2:
-    image: sci-lammps:latest
+    image: sci-lammps-deploy:latest
     hostname: worker2
     command: /usr/sbin/sshd -D
     healthcheck:

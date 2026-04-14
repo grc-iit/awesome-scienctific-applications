@@ -11,8 +11,8 @@ services:
   validate:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: sci-nyx:latest
+      dockerfile: Dockerfile.deploy
+    image: sci-nyx-deploy:latest
     command:
       - bash
       - -c
@@ -32,7 +32,7 @@ services:
               capabilities: [gpu]
 
   head:
-    image: sci-nyx:latest
+    image: sci-nyx-deploy:latest
     hostname: head
     depends_on:
       worker1:
@@ -67,7 +67,7 @@ services:
               capabilities: [gpu]
 
   worker1:
-    image: sci-nyx:latest
+    image: sci-nyx-deploy:latest
     hostname: worker1
     command: /usr/sbin/sshd -D
     healthcheck:
@@ -89,7 +89,7 @@ services:
               capabilities: [gpu]
 
   worker2:
-    image: sci-nyx:latest
+    image: sci-nyx-deploy:latest
     hostname: worker2
     command: /usr/sbin/sshd -D
     healthcheck:

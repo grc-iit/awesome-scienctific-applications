@@ -1,0 +1,38 @@
+# Nyx deployment image — runtime-only, no recompilation.
+# Copies the pre-built nyx_HydroTests binary from the builder image.
+# Requires sci-nyx:latest to exist before building this image.
+#
+# Build:
+#   docker build -t sci-nyx          -f Dockerfile       .
+#   docker build -t sci-nyx-deploy   -f Dockerfile.deploy .
+
+FROM sci-nyx:latest AS builder
+
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openmpi-bin libopenmpi3 \
+        openssh-server openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Parallel HDF5 runtime libraries
+COPY --from=builder /opt/hdf5/lib /opt/hdf5/lib
+
+# Nyx binary
+COPY --from=builder /opt/Nyx/build/Exec/HydroTests/nyx_HydroTests \
+                    /opt/Nyx/build/Exec/HydroTests/nyx_HydroTests
+
+# Input files needed by the test suite
+COPY --from=builder /opt/Nyx/Exec/HydroTests /opt/Nyx/Exec/HydroTests
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV HDF5_ROOT=/opt/hdf5
+ENV LD_LIBRARY_PATH=/opt/hdf5/lib:${LD_LIBRARY_PATH}
+ENV PATH=/opt/Nyx/build/Exec/HydroTests:${PATH}
+
+EXPOSE 22
+CMD ["/bin/bash"]
