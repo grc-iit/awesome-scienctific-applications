@@ -1,0 +1,37 @@
+# V-pipe deployment image — copies the conda env, the V-pipe source tree,
+# and the driver from the builder image.
+# Requires sci-vpipe:latest to exist before building this image.
+#
+# NOTE: the per-rule conda environments V-pipe itself uses (BWA, samtools,
+# etc.) are NOT materialised at build time — Snakemake creates them on
+# first run under `--conda-prefix`. Plan for an additional ~5-10 min on
+# the first `docker compose run --rm validate` while those solves happen.
+#
+# Build:
+#   docker build -t sci-vpipe        -f Dockerfile        .
+#   docker build -t sci-vpipe-deploy -f Dockerfile.deploy .
+
+FROM sci-vpipe:latest AS builder
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates openssh-server openssh-client \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/conda       /opt/conda
+COPY --from=builder /opt/vpipe-env   /opt/vpipe-env
+COPY --from=builder /opt/V-pipe      /opt/V-pipe
+COPY --from=builder /opt/run_vpipe.sh /opt/run_vpipe.sh
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV PATH=/opt/vpipe-env/bin:/opt/conda/bin:${PATH}
+ENV PYTHONNOUSERSITE=1
+
+EXPOSE 22
+CMD ["/bin/bash"]
