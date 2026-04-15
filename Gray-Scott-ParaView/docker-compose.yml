@@ -1,0 +1,167 @@
+# Gray-Scott ParaView simulated cluster — single-node and multi-node tests.
+#
+# The output volume is shared across head and workers so rendered images and
+# ADIOS2 BP5 files are accessible to all MPI ranks.
+#
+# Single-node validation (1 container, 2 MPI ranks):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-paraview-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /output &&
+
+        echo '=== Test 1: pvbatch rendering ===' &&
+        pvbatch --force-offscreen-rendering <<'PYEOF'
+        from paraview.simple import *
+        w = Wavelet()
+        UpdatePipeline()
+        r = Show(w)
+        r.SetRepresentationType('Surface')
+        ColorBy(r, ('POINTS', 'RTData'))
+        view = GetActiveView()
+        view.ViewSize = [300, 300]
+        Render()
+        SaveScreenshot('/output/wavelet.png')
+        print('pvbatch render: OK')
+        PYEOF
+
+        echo '=== Test 2: ADIOS2 BP5 write + Fides read ===' &&
+        python3 <<'PYEOF'
+        import adios2, numpy as np
+        with adios2.open('/output/test.bp', 'w') as f:
+            arr = np.random.rand(8, 8, 8).astype(np.float64)
+            f.write('density', arr, arr.shape, [0,0,0], arr.shape)
+        print('ADIOS2 BP5 write: OK')
+        PYEOF
+
+        pvbatch --force-offscreen-rendering <<'PYEOF'
+        from paraview.simple import *
+        reader = FidesReader(FileName='/output/test.bp')
+        reader.UpdatePipeline()
+        info = reader.GetDataInformation()
+        print(f'Fides read: OK — {info.GetNumberOfPoints()} points')
+        PYEOF
+
+        echo '=== Test 3: MPI pvbatch ===' &&
+        mpirun -np 2 --oversubscribe --allow-run-as-root \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            pvbatch --force-offscreen-rendering -c \
+            "from paraview.simple import *; w=Wavelet(); Show(w); Render(); print('MPI pvbatch: OK')" &&
+
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  head:
+    image: sci-paraview-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd &&
+        mkdir -p /output &&
+
+        echo '=== Multi-node pvserver test ===' &&
+        mpirun -np 3 --allow-run-as-root \
+            --host head:1,worker1:1,worker2:1 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            pvbatch --force-offscreen-rendering <<'PYEOF'
+        from paraview.simple import *
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        w = Wavelet()
+        UpdatePipeline()
+        Show(w)
+        Render()
+        if comm.Get_rank() == 0:
+            SaveScreenshot('/output/cluster_render.png')
+            print(f'Cluster render: OK — {comm.Get_size()} ranks')
+        PYEOF
+
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker1:
+    image: sci-paraview-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker2:
+    image: sci-paraview-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

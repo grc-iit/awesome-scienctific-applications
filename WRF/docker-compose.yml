@@ -1,0 +1,101 @@
+# WRF simulated cluster — single-node and multi-node validation.
+#
+# The output volume is shared across head and workers so all MPI ranks
+# can access the run directory (namelist, lookup tables, and executables).
+#
+# Single-node ideal case (2 MPI ranks, 1 container):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-wrf-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /output/test && cd /output/test && \
+        ln -sf /opt/WRF/run/* . && \
+        ln -sf /opt/WRF/main/ideal.exe . && \
+        ln -sf /opt/WRF/main/wrf.exe . && \
+        cp /opt/WRF/test/em_quarter_ss/namelist.input . && \
+        ./ideal.exe && \
+        mpirun -np 2 --oversubscribe --allow-run-as-root \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            ./wrf.exe && \
+        ls wrfout_d01_* && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-wrf-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        mkdir -p /output/test && cd /output/test && \
+        ln -sf /opt/WRF/run/* . && \
+        ln -sf /opt/WRF/main/ideal.exe . && \
+        ln -sf /opt/WRF/main/wrf.exe . && \
+        cp /opt/WRF/test/em_quarter_ss/namelist.input . && \
+        ./ideal.exe && \
+        mpirun -np 4 --allow-run-as-root \
+            --host head:2,worker1:1,worker2:1 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            ./wrf.exe && \
+        ls wrfout_d01_* && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-wrf-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-wrf-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

@@ -1,75 +1,196 @@
-# WRF (Weather Research and Forecasting Model)
+# WRF — Weather Research and Forecasting Model
 
-## Overview
+[WRF](https://github.com/wrf-model/WRF) is a next-generation mesoscale numerical
+weather prediction system developed by NCAR, NOAA, and partners. This container
+builds WRF v4.6.0 with **parallel HDF5**, **ADIOS2**, and **NetCDF** I/O support,
+plus the **WPS** preprocessing system.
 
-The Weather Research and Forecasting (WRF) model is a next-generation mesoscale numerical weather prediction system designed for both atmospheric research and operational forecasting. Developed collaboratively by NCAR, NOAA, and partner institutions, WRF is used worldwide for weather forecasting, regional climate simulations, air quality modeling, and coupled-model applications.
+WRF is CPU-only (MPI parallelism). The CUDA layer in the base image is inherited
+but unused by WRF itself.
 
-## Key Features
+---
 
-- **Multiple dynamical cores**: ARW (Advanced Research WRF) and NMM (Nonhydrostatic Mesoscale Model)
-- **Comprehensive physics**: Multiple options for microphysics, cumulus parameterization, radiation, PBL, and land surface models
-- **Nesting**: One-way and two-way grid nesting for multi-scale simulations
-- **Data assimilation**: WRFDA system supporting 3DVAR, 4DVAR, and hybrid ensemble-variational methods
-- **Scalable**: Designed for parallel computing with MPI and OpenMP
-- **Coupled systems**: WRF-Chem (chemistry), WRF-Hydro (hydrology), WRF-Fire (wildfire)
+## Prerequisites
 
-## Governing Equations
+- Docker or Podman
+- Base image `sci-hpc-base` built from `../base/Dockerfile`
 
-WRF solves the fully compressible, nonhydrostatic Euler equations in flux form, using terrain-following hydrostatic-pressure vertical coordinates:
+---
 
-- Conservation of momentum (3D)
-- Conservation of mass (continuity equation)
-- Thermodynamic energy equation
-- Conservation equations for moisture species
-- Equation of state
-
-## Dependencies
-
-- Fortran and C compilers
-- MPI library
-- NetCDF (required for I/O)
-- HDF5 (recommended)
-- JasPer, libpng, zlib (for GRIB2 support in WPS)
-- Optional: PnetCDF, ADIOS2
-
-## Build Instructions
+## 1  Build
 
 ```bash
-# Configure WRF
-cd WRF
-./configure    # Select compiler and parallelism options
-./compile em_real -j 4
-
-# Configure and compile WPS (WRF Preprocessing System)
-cd ../WPS
-./configure
-./compile
+docker build -t sci-hpc-base ../base
+docker build -t sci-wrf .
 ```
 
-## Typical Workflow
-
-1. **WPS (Preprocessing)**: `geogrid.exe` -> `ungrib.exe` -> `metgrid.exe`
-2. **Real**: `real.exe` (generate initial and boundary conditions)
-3. **WRF**: `wrf.exe` (run the simulation)
-4. **Post-processing**: NCL, Python, or other tools for visualization
+Optionally build a lighter deploy image (skips recompilation):
 
 ```bash
-mpirun -n <num_procs> ./real.exe
-mpirun -n <num_procs> ./wrf.exe
+docker build -t sci-wrf-deploy -f Dockerfile.deploy .
 ```
 
-## Configuration
+The WRF compile takes a while (~30 min with 40 cores). The image includes:
 
-WRF is configured through `namelist.input` for runtime parameters and `namelist.wps` for preprocessing:
+| Library | Version | Location |
+|---------|---------|----------|
+| HDF5 (parallel, Fortran) | 2.0.0 | `/opt/hdf5` (rebuilt with zlib + szip + Fortran) |
+| NetCDF-C | 4.9.2 | `/opt/netcdf` |
+| NetCDF-Fortran | 4.6.1 | `/opt/netcdf` |
+| ADIOS2 | 2.10.2 | `/opt/adios2` |
+| JasPer | 4.2.4 | `/opt/jasper` |
 
-- Domain setup (grid spacing, dimensions, nesting)
-- Physics options (microphysics, radiation, PBL, cumulus, land surface)
-- Dynamics options (time step, diffusion, damping)
-- Output control (history interval, variables, file format)
+### WRF executables
 
-## References
+| Binary | Purpose |
+|--------|---------|
+| `wrf.exe` | Main WRF simulation |
+| `real.exe` | Generate initial/boundary conditions from real data |
+| `ideal.exe` | Generate initial conditions for ideal cases |
+| `ndown.exe` | One-way nesting |
+| `tc.exe` | Tropical cyclone bogusing |
 
-- Skamarock, W.C., Klemp, J.B., Dudhia, J., et al. (2019). "A Description of the Advanced Research WRF Model Version 4." *NCAR Technical Note*, NCAR/TN-556+STR.
-- Powers, J.G., Klemp, J.B., Skamarock, W.C., et al. (2017). "The Weather Research and Forecasting Model: Overview, System Efforts, and Future Directions." *Bulletin of the American Meteorological Society*, 98(8), 1717-1737.
-- Official website: https://www.mmm.ucar.edu/models/wrf
-- Official repository: https://github.com/wrf-model/WRF
+### WPS executables
+
+| Binary | Status |
+|--------|--------|
+| `geogrid.exe` | Built |
+| `metgrid.exe` | Built |
+| `ungrib.exe` | Not built (requires JasPer 2.x for `jpc_decode` API) |
+
+---
+
+## 2  Typical Workflow
+
+### Ideal case (no external data required)
+
+```bash
+docker run --rm -v $(pwd)/run:/run sci-wrf bash -c "
+  cd /run && ln -sf /opt/WRF/run/* . &&
+  cp /opt/WRF/test/em_quarter_ss/namelist.input . &&
+  ln -sf /opt/WRF/main/ideal.exe . &&
+  ./ideal.exe &&
+  mpirun -np 2 --oversubscribe --allow-run-as-root wrf.exe
+"
+```
+
+### Available ideal cases
+
+| Case | Physics |
+|------|---------|
+| `test/em_quarter_ss` | Quarter-circle supercell storm |
+| `test/em_b_wave` | Baroclinic wave |
+| `test/em_squall2d_x` | 2-D squall line |
+
+### Real-data case
+
+```bash
+# 1. WPS: prepare geographic and meteorological grids
+docker run --rm -v $(pwd)/data:/data -v $(pwd)/run:/run sci-wrf bash -c "
+  cd /run && ln -sf /opt/WPS/* . &&
+  ./geogrid.exe &&
+  ./metgrid.exe
+"
+
+# 2. real.exe: generate initial and boundary conditions
+docker run --rm -v $(pwd)/run:/run sci-wrf bash -c "
+  cd /run && ln -sf /opt/WRF/run/* . &&
+  cp /your/namelist.input . &&
+  mpirun -np 4 --oversubscribe --allow-run-as-root real.exe
+"
+
+# 3. wrf.exe: run the forecast
+docker run --rm -v $(pwd)/run:/run sci-wrf bash -c "
+  cd /run &&
+  mpirun -np 4 --oversubscribe --allow-run-as-root wrf.exe
+"
+```
+
+---
+
+## 3  Multi-Node Run
+
+### Start workers
+
+```bash
+# worker1.cluster.local
+docker run -d --rm \
+  --hostname worker1 --network host \
+  -v $(pwd)/run:/run \
+  --name wrf-worker1 sci-wrf /usr/sbin/sshd -D
+
+# worker2.cluster.local
+docker run -d --rm \
+  --hostname worker2 --network host \
+  -v $(pwd)/run:/run \
+  --name wrf-worker2 sci-wrf /usr/sbin/sshd -D
+```
+
+### Run from head node
+
+```bash
+docker run --rm \
+  --network host \
+  -v $(pwd)/run:/run \
+  sci-wrf \
+  mpirun -np 6 --allow-run-as-root \
+    --host $(hostname):2,worker1.cluster.local:2,worker2.cluster.local:2 \
+    wrf.exe
+```
+
+WRF decomposes the domain across MPI ranks automatically.
+
+---
+
+## 4  Simulated Cluster Validation
+
+### Validate single-node
+
+```bash
+docker compose run --rm validate
+```
+
+The `validate` service runs the quarter-circle supercell ideal case with 2 MPI
+ranks. Expected: WRF startup banner, timestep output, and `wrfout_d01_*` files.
+
+### Validate multi-node
+
+```bash
+docker compose up --abort-on-container-exit --exit-code-from head head
+```
+
+### Cleanup
+
+```bash
+docker compose down -v
+```
+
+---
+
+## 5  ADIOS2 I/O
+
+WRF v4.5+ supports ADIOS2 as an alternative I/O framework alongside NetCDF.
+To use ADIOS2 output, set `io_form_history` and related `io_form_*` options in
+`namelist.input` to the ADIOS2 I/O form number (consult the WRF Users' Guide
+for the exact value in your version).
+
+ADIOS2 is built with:
+- MPI support (parallel I/O)
+- HDF5 engine (can write ADIOS2 data as HDF5)
+- Fortran bindings (used by WRF's `io_adios2` module)
+
+---
+
+## 6  Build Notes
+
+- **HDF5 rebuild**: The base image's HDF5 is rebuilt in this Dockerfile to add
+  zlib, szip (libaec), and Fortran support — all required by WRF/NetCDF.
+- **HDF5 2.0.0 compatibility**: NetCDF-C and ADIOS2 are built with
+  `-DH5_USE_114_API` for backward compatibility with the 2.0.0 API changes.
+- **WRF configure option 34** = GNU (gfortran/gcc) dmpar on x86\_64 Linux.
+  If building on a different platform, run `./configure` interactively.
+- **WPS configure option 3** = GNU dmpar with GRIB2 support.
+- **ungrib.exe**: Not built because JasPer 4.x removed the `jpc_decode` API
+  that WPS expects. To fix, downgrade JasPer to 2.0.x in the Dockerfile.
+- WRF runtime lookup tables (LANDUSE.TBL, RRTM data, etc.) are in `/opt/WRF/run/`.
+  Always symlink them into your working directory before running `wrf.exe`.

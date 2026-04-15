@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Parallel HDF5 2.0.0
 RUN curl -L -o /tmp/hdf5.tar.gz \
     "https://github.com/HDFGroup/hdf5/releases/download/2.0.0/hdf5-2.0.0.tar.gz" \
-    && cd /tmp && tar xzf hdf5.tar.gz \
+    && cd /tmp && tar xzf hdf5.tar.gz --no-same-owner --no-same-permissions \
     && mkdir hdf5-build && cd hdf5-build \
     && cmake /tmp/hdf5-2.0.0 \
         -DCMAKE_INSTALL_PREFIX=/opt/hdf5 \
