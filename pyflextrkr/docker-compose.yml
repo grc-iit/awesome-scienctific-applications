@@ -3,8 +3,13 @@
 # Single-node (idealized MCS demo, serial, one container):
 #   docker compose run --rm validate
 #
-# Multi-node cluster (three independent demo runs, one per node over SSH):
+# Multi-node cluster (Dask-MPI distributed across head + 2 workers):
 #   docker compose up --abort-on-container-exit --exit-code-from head head
+#
+# The multi-node test launches ONE `mpirun` from the head container that
+# spans all three containers over SSH. Ranks are allocated as:
+#   rank 0 = Dask scheduler, rank 1 = client, ranks 2..N-1 = workers.
+# This was validated bare-metal on Slurm (see VALIDATION.md).
 
 services:
 
@@ -35,17 +40,10 @@ services:
       - -c
       - |
         /usr/sbin/sshd && \
-        # Fan out the idealized demo across head + 2 workers; each node
-        # runs the same demo against its own scratch dir under /output.
-        /opt/run_demo.sh demo_mcs_tbpf_idealized /output/head &
-        ssh -o StrictHostKeyChecking=no worker1 \
-          "/opt/run_demo.sh demo_mcs_tbpf_idealized /output/worker1" &
-        ssh -o StrictHostKeyChecking=no worker2 \
-          "/opt/run_demo.sh demo_mcs_tbpf_idealized /output/worker2" &
-        wait && \
-        test -d /output/head/mcs_tbpf/idealized/test4/stats && \
-        test -d /output/worker1/mcs_tbpf/idealized/test4/stats && \
-        test -d /output/worker2/mcs_tbpf/idealized/test4/stats && \
+        # One mpirun spans head + worker1 + worker2. 6 total ranks:
+        # 1 Dask scheduler + 1 client + 4 workers (2 per worker node +
+        # 2 on head). Shared volume /output is visible to all containers.
+        /opt/run_demo_multinode.sh /output/cluster head,worker1,worker2 6 && \
         echo '=== CLUSTER TEST PASSED ==='
     volumes:
       - output:/output

@@ -6,11 +6,20 @@ convective cells, cyclones, etc. — across time-sequenced gridded fields.
 It is developed primarily at PNNL and backs several observational/model
 MCS tracking workflows.
 
-The container is **CPU-only**. PyFLEXTRKR's native parallelism is via Dask,
-but the Dask local-cluster mode has a known HDF5 concurrent-access bug; the
-bare-metal benchmark on which this container is based fell back to
-serial mode (`run_parallel=0, nprocesses=1`), and the `run_demo.sh`
-wrapper here does the same by passing `-n 1` to the upstream demo runner.
+The container is **CPU-only**. PyFLEXTRKR has three parallel modes:
+
+| `run_parallel` | Mode | Status in this image |
+|---|---|---|
+| `0` | serial | ✅ used by `run_demo.sh` for single-node self-test |
+| `1` | Dask `LocalCluster` | ❌ known HDF5 concurrent-access bug — not used |
+| `2` | Dask-MPI (distributed) | ✅ used by `run_demo_multinode.sh` across SSH hosts |
+
+The multi-node mode runs **one real distributed Dask cluster** spanning
+every host in the MPI world, not three independent copies of the demo.
+Rank 0 hosts the scheduler, rank 1 runs the pipeline driver, and the
+remaining ranks are workers. The `h5netcdf` engine is substituted for
+`netcdf4` at runtime to avoid the same HDF5 global-lock deadlock that
+breaks mode 1.
 
 The self-test exercises `demo_mcs_tbpf_idealized` — the smallest upstream
 demo case — which downloads a ~1-2 MB idealized Tb+precipitation dataset
@@ -69,29 +78,37 @@ docker run --rm -v $(pwd)/output:/output sci-pyflextrkr-deploy \
 
 ## 3  Multi-Node Run
 
-Since the pipeline's Dask parallelism is disabled for correctness reasons
-(see HDF5 note above), cluster-level parallelism is achieved by **running
-independent demo cases on each worker over SSH**. This proves the
-SSH/network topology is live without fighting the HDF5 bug.
+Real distributed Dask via Dask-MPI across SSH-reachable hosts. `mpirun`
+is launched once from the head container and spans every node.
 
 ### Worker nodes
 
 ```bash
-docker run -d --rm --hostname worker1 --network host \
+docker run -d --rm --hostname worker1 --network mpi-net \
   --name pyflextrkr-worker1 sci-pyflextrkr-deploy /usr/sbin/sshd -D
+docker run -d --rm --hostname worker2 --network mpi-net \
+  --name pyflextrkr-worker2 sci-pyflextrkr-deploy /usr/sbin/sshd -D
 ```
 
 ### Head node
 
 ```bash
-docker run --rm --network host \
+docker run --rm --network mpi-net \
   -v $(pwd)/output:/output \
   sci-pyflextrkr-deploy bash -c '
-    /opt/run_demo.sh demo_mcs_tbpf_idealized /output/head &
-    ssh worker1 "/opt/run_demo.sh demo_mcs_tbpf_idealized /output/worker1" &
-    ssh worker2 "/opt/run_demo.sh demo_mcs_tbpf_idealized /output/worker2" &
-    wait'
+    /usr/sbin/sshd &&
+    /opt/run_demo_multinode.sh /output/cluster head,worker1,worker2 6'
 ```
+
+`run_demo_multinode.sh`:
+
+1. runs the upstream demo harness once serially to download the
+   ~1-2 MB idealized dataset and template its config,
+2. flips `run_parallel: 2` in that config,
+3. wipes the seed's `stats/`/`tracking/`/`mcstracking/`,
+4. launches `mpirun -np N -host head,worker1,worker2 python
+   /opt/run_mcs_tbpf_mpi.py config.yml` — one real Dask-MPI cluster,
+5. asserts the MPI pass re-wrote `stats/`.
 
 ---
 
@@ -121,10 +138,12 @@ directory. Expected tail: `=== CLUSTER TEST PASSED ===`.
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Builder image (`sci-pyflextrkr`): Python 3.10 venv + PyFLEXTRKR editable install from upstream `main`. |
-| `Dockerfile.deploy` | Minimal runtime image (`sci-pyflextrkr-deploy`): Ubuntu 24.04 + baked venv + upstream source tree (needed for demo runner and config templates) + SSH. |
-| `docker-compose.yml` | `validate` (single demo, serial) and `head`/`worker1`/`worker2` (three parallel demo runs over SSH). |
+| `Dockerfile` | Builder image (`sci-pyflextrkr`): Python 3.10 venv + PyFLEXTRKR editable install + `dask-mpi`/`mpi4py`/`h5netcdf`/`healpy`. |
+| `Dockerfile.deploy` | Minimal runtime image (`sci-pyflextrkr-deploy`): Ubuntu 24.04 + baked venv + upstream source tree + `openmpi-bin`/`libopenmpi3t64` + SSH. |
+| `docker-compose.yml` | `validate` (single-node serial demo) and `head`/`worker1`/`worker2` (one Dask-MPI cluster spanning three containers). |
 | `run_demo.sh` | Wrapper around `tests/run_demo_tests.py` that forces `-n 1` (serial) and asserts a non-empty `stats/` directory is produced. Installed at `/opt/run_demo.sh`. |
+| `run_demo_multinode.sh` | Seeds data via the harness, flips `run_parallel: 2`, wipes outputs, launches one `mpirun` across supplied hosts. Installed at `/opt/run_demo_multinode.sh`. |
+| `run_mcs_tbpf_mpi.py` | Dask-MPI variant of upstream `runscripts/run_mcs_tbpf.py`. Calls `dask_mpi.initialize()`, monkey-patches `xr.open_dataset` to use `h5netcdf` (with NetCDF3 fallback). Installed at `/opt/run_mcs_tbpf_mpi.py`. |
 | `README.md` | This file. |
 | `VALIDATION.md` | Record of what has and has not been tested. |
 
