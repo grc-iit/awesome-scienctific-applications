@@ -1,15 +1,14 @@
-# PyFLEXTRKR simulated cluster — build, single-node, multi-node tests.
+# rna-seq-star-deseq2 simulated cluster — build, single-node, multi-node.
 #
-# Single-node (idealized MCS demo, serial, one container):
+# Single-node (4-sample yeast benchmark, Snakemake + --use-conda):
 #   docker compose run --rm validate
 #
-# Multi-node cluster (Dask-MPI distributed across head + 2 workers):
+# Multi-node cluster (three independent project dirs fanned out via SSH):
 #   docker compose up --abort-on-container-exit --exit-code-from head head
 #
-# The multi-node test launches ONE `mpirun` from the head container that
-# spans all three containers over SSH. Ranks are allocated as:
-#   rank 0 = Dask scheduler, rank 1 = client, ranks 2..N-1 = workers.
-# This was validated bare-metal on Slurm (see VALIDATION.md).
+# NOTE: first run materialises the per-rule conda envs (STAR, samtools,
+# DESeq2, multiqc, …). Expect an extra 10-15 minutes of solve time on
+# the first `validate`.
 
 services:
 
@@ -17,18 +16,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.deploy
-    image: sci-pyflextrkr-deploy:latest
+    image: sci-rna-seq-star-deseq2-deploy:latest
     command:
       - bash
       - -c
       - |
-        /opt/run_demo.sh demo_mcs_tbpf_idealized /output/data && \
+        /opt/run_rnaseq.sh /output/run && \
         echo '=== SINGLE-NODE TEST PASSED ==='
     volumes:
       - output:/output
 
   head:
-    image: sci-pyflextrkr-deploy:latest
+    image: sci-rna-seq-star-deseq2-deploy:latest
     hostname: head
     depends_on:
       worker1:
@@ -40,10 +39,13 @@ services:
       - -c
       - |
         /usr/sbin/sshd && \
-        # One mpirun spans head + worker1 + worker2. 6 total ranks:
-        # 1 Dask scheduler + 1 client + 4 workers (2 per worker node +
-        # 2 on head). Shared volume /output is visible to all containers.
-        /opt/run_demo_multinode.sh /output/cluster head,worker1,worker2 6 && \
+        /opt/run_rnaseq.sh /output/head &
+        ssh -o StrictHostKeyChecking=no worker1 "/opt/run_rnaseq.sh /output/worker1" &
+        ssh -o StrictHostKeyChecking=no worker2 "/opt/run_rnaseq.sh /output/worker2" &
+        wait && \
+        find /output/head    -path '*/results/diffexp/*.diffexp.symbol.tsv' -print -quit | grep -q . && \
+        find /output/worker1 -path '*/results/diffexp/*.diffexp.symbol.tsv' -print -quit | grep -q . && \
+        find /output/worker2 -path '*/results/diffexp/*.diffexp.symbol.tsv' -print -quit | grep -q . && \
         echo '=== CLUSTER TEST PASSED ==='
     volumes:
       - output:/output
@@ -51,7 +53,7 @@ services:
       - mpi-net
 
   worker1:
-    image: sci-pyflextrkr-deploy:latest
+    image: sci-rna-seq-star-deseq2-deploy:latest
     hostname: worker1
     command: /usr/sbin/sshd -D
     healthcheck:
@@ -66,7 +68,7 @@ services:
       - mpi-net
 
   worker2:
-    image: sci-pyflextrkr-deploy:latest
+    image: sci-rna-seq-star-deseq2-deploy:latest
     hostname: worker2
     command: /usr/sbin/sshd -D
     healthcheck:

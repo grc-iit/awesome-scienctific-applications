@@ -1,0 +1,33 @@
+# rna-seq-star-deseq2 deployment image — copies the Snakemake env,
+# pipeline source, benchmark, and driver from the builder image.
+# Requires sci-rna-seq-star-deseq2:latest to exist before building this.
+#
+# Build:
+#   docker build -t sci-rna-seq-star-deseq2        -f Dockerfile        .
+#   docker build -t sci-rna-seq-star-deseq2-deploy -f Dockerfile.deploy .
+
+FROM sci-rna-seq-star-deseq2:latest AS builder
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates openssh-server openssh-client \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/conda                /opt/conda
+COPY --from=builder /opt/rnaseq-env           /opt/rnaseq-env
+COPY --from=builder /opt/rna-seq-star-deseq2  /opt/rna-seq-star-deseq2
+COPY --from=builder /opt/rnaseq-bench         /opt/rnaseq-bench
+COPY --from=builder /opt/run_rnaseq.sh        /opt/run_rnaseq.sh
+
+# SSH host keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV PATH=/opt/rnaseq-env/bin:/opt/conda/bin:${PATH}
+ENV PYTHONNOUSERSITE=1
+
+EXPOSE 22
+CMD ["/bin/bash"]
