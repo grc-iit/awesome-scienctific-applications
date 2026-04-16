@@ -1,0 +1,111 @@
+# OpenFOAM-dev simulated cluster — build, single-node, and multi-node tests.
+#
+# The output volume is shared across head and workers so case files and
+# decomposed domains are accessible to all MPI ranks.
+#
+# Single-node (lid-driven cavity, serial):
+#   docker compose run --rm validate
+#
+# Multi-node cluster (head + 2 workers, 4 MPI ranks):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-openfoam-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        source /opt/OpenFOAM/OpenFOAM-dev/etc/bashrc && \
+        mkdir -p /output && \
+        cp -r $$FOAM_TUTORIALS/incompressibleFluid/cavity /output/cavity && \
+        cd /output/cavity && \
+        blockMesh && \
+        foamRun && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-openfoam-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        source /opt/OpenFOAM/OpenFOAM-dev/etc/bashrc && \
+        mkdir -p /output && \
+        cp -r $$FOAM_TUTORIALS/incompressibleFluid/cavity /output/cavity && \
+        cd /output/cavity && \
+        blockMesh && \
+        cat > system/decomposeParDict << 'DICT'
+        FoamFile
+        {
+            format ascii;
+            class dictionary;
+            object decomposeParDict;
+        }
+        numberOfSubdomains 4;
+        method simple;
+        simpleCoeffs
+        {
+            n (2 2 1);
+        }
+        DICT
+        decomposePar && \
+        mpirun -np 4 --allow-run-as-root \
+            --host head:2,worker1:1,worker2:1 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            foamRun -parallel && \
+        reconstructPar && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-openfoam-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-openfoam-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

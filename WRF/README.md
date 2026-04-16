@@ -181,7 +181,226 @@ ADIOS2 is built with:
 
 ---
 
-## 6  Build Notes
+## 6  Running WRF with Jarvis-CD
+
+A [Jarvis-CD](https://github.com/grc-iit/jarvis-cd) package for WRF lives at
+[`wrf/`](wrf/). It stages an `adios2.xml` (BP5 or Hermes engine) into the
+WRF run directory and launches `wrf.exe` under MPI across the hosts in
+the current Jarvis pipeline's hostfile.
+
+```
+wrf/
+├── pkg.py                # Jarvis Application definition (class Wrf)
+├── config/
+│   ├── adios2.xml        # Template used when engine=bp5
+│   ├── hermes.xml        # Template used when engine=hermes
+│   └── namelist.input    # Reference namelist (io_form_* = 14 for ADIOS2)
+└── README.md
+```
+
+Package options (exposed via `jarvis pipeline append wrf <key>=<val>`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `nprocs` | `1` | Total MPI ranks passed to `mpirun -np`. |
+| `ppn` | `None` | Ranks per node; Jarvis uses this with its hostfile. |
+| `wrf_location` | `None` | Working dir containing `wrf.exe` + namelist; pkg `cwd`s here and writes `adios2.xml` here. |
+| `engine` | `bp5` | `bp5` (native ADIOS2) or `hermes` (coeus-adapter plugin). |
+| `Execution_order` | `None` | Hermes `execution_order` parameter (ignored for bp5). |
+| `db_path` | `benchmark_metadata.db` | SQLite metadata DB (Hermes); `clean` removes it. |
+
+### 6.1  Run single-node in the deployment container
+
+Drive a 2-rank ideal-case run with Jarvis inside one `sci-wrf-deploy`
+container:
+
+```bash
+docker run --rm -it \
+  --name wrf-jarvis \
+  -v "$(pwd)/wrf/..":/jarvis-pkgs/WRF \
+  -v "$(pwd)/run":/run \
+  sci-wrf-deploy bash
+
+# --- inside the container ----------------------------------------------
+pip install --break-system-packages \
+    git+https://github.com/grc-iit/jarvis-cd.git \
+    git+https://github.com/grc-iit/jarvis-util.git
+
+jarvis bootstrap from local        # single-host config
+jarvis repo add /jarvis-pkgs/WRF
+
+# Prepare the WRF working directory.
+mkdir -p /run/em_quarter_ss && cd /run/em_quarter_ss
+ln -sf /opt/WRF/run/* .
+ln -sf /opt/WRF/main/ideal.exe .
+ln -sf /opt/WRF/main/wrf.exe   .
+cp /opt/WRF/test/em_quarter_ss/namelist.input .
+./ideal.exe                        # builds wrfinput_d01 / wrfbdy_d01
+
+# Build + run the Jarvis pipeline.
+jarvis pipeline create wrf_single
+jarvis pipeline env build
+jarvis pipeline append wrf \
+    wrf_location=/run/em_quarter_ss \
+    nprocs=2 ppn=2 engine=bp5
+jarvis pipeline run
+
+ls /run/em_quarter_ss/wrfout_d01_*
+```
+
+For the Hermes path (requires a deploy image extended with `hermes` +
+`coeus-adapter`):
+
+```bash
+jarvis pipeline append hermes_run --sleep=10 provider=sockets
+jarvis pipeline append wrf \
+    wrf_location=/run/em_quarter_ss \
+    nprocs=2 ppn=2 engine=hermes \
+    Execution_order=0 \
+    db_path=/run/em_quarter_ss/benchmark_metadata.db
+jarvis pipeline run
+```
+
+### 6.2  Distribute the deploy container across nodes
+
+The deploy image doubles as a worker by running `sshd`. A Jarvis head
+container drives `mpirun` over SSH to the workers using a hostfile that
+the `Wrf` pkg forwards to `MpiExecInfo`.
+
+```bash
+# --- on each physical worker node --------------------------------------
+docker run -d --rm \
+    --hostname worker1 --network host \
+    -v $(pwd)/run:/run \
+    --name wrf-worker1 sci-wrf-deploy /usr/sbin/sshd -D
+
+docker run -d --rm \
+    --hostname worker2 --network host \
+    -v $(pwd)/run:/run \
+    --name wrf-worker2 sci-wrf-deploy /usr/sbin/sshd -D
+```
+
+`/run/` must be a **shared** path visible on every node (NFS, Lustre,
+cloud bucket fuse mount, etc.) — WRF ranks on the workers read the same
+namelist, lookup tables, and input files the head prepared.
+
+```bash
+# --- on the head node --------------------------------------------------
+docker run --rm -it \
+    --hostname head --network host \
+    -v $(pwd)/run:/run \
+    -v $(pwd)/wrf/..:/jarvis-pkgs/WRF \
+    --name wrf-head sci-wrf-deploy bash
+
+# --- inside head -------------------------------------------------------
+pip install --break-system-packages \
+    git+https://github.com/grc-iit/jarvis-cd.git \
+    git+https://github.com/grc-iit/jarvis-util.git
+
+cat > /etc/hostfile <<EOF
+head
+worker1
+worker2
+EOF
+jarvis bootstrap from local
+jarvis hostfile set /etc/hostfile     # the pkg passes this to MpiExecInfo
+jarvis repo add /jarvis-pkgs/WRF
+
+# Stage the run directory (must be on the shared mount).
+mkdir -p /run/em_quarter_ss && cd /run/em_quarter_ss
+ln -sf /opt/WRF/run/* .
+ln -sf /opt/WRF/main/ideal.exe .
+ln -sf /opt/WRF/main/wrf.exe   .
+cp /opt/WRF/test/em_quarter_ss/namelist.input .
+./ideal.exe
+
+# Run the Jarvis pipeline across 3 nodes, 2 ranks each.
+jarvis pipeline create wrf_multi
+jarvis pipeline env build
+jarvis pipeline append wrf \
+    wrf_location=/run/em_quarter_ss \
+    nprocs=6 ppn=2 engine=bp5
+jarvis pipeline run
+```
+
+Jarvis farms the ranks out per the hostfile; WRF handles domain
+decomposition across the 6 MPI ranks.
+
+### 6.3  Simulated Docker cluster validation
+
+To validate the multi-node flow above on a single physical host, append
+the following `jarvis-validate` service to `docker-compose.yml`. It
+reuses the existing `worker1`/`worker2` services, the shared `output`
+volume, and the `mpi-net` bridge.
+
+```yaml
+  jarvis-validate:
+    image: sci-wrf-deploy:latest
+    hostname: jarvis-head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    volumes:
+      - output:/output
+      - ./wrf:/jarvis-pkgs/WRF/wrf:ro        # mount the pkg folder
+    networks:
+      - mpi-net
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        /usr/sbin/sshd
+
+        pip install --break-system-packages --quiet \
+            git+https://github.com/grc-iit/jarvis-cd.git \
+            git+https://github.com/grc-iit/jarvis-util.git
+
+        cat > /etc/hostfile <<EOF
+        jarvis-head
+        worker1
+        worker2
+        EOF
+        jarvis bootstrap from local
+        jarvis hostfile set /etc/hostfile
+        jarvis repo add /jarvis-pkgs/WRF
+
+        mkdir -p /output/em_quarter_ss && cd /output/em_quarter_ss
+        ln -sf /opt/WRF/run/* .
+        ln -sf /opt/WRF/main/ideal.exe .
+        ln -sf /opt/WRF/main/wrf.exe   .
+        cp /opt/WRF/test/em_quarter_ss/namelist.input .
+        ./ideal.exe
+
+        jarvis pipeline create wrf_ci
+        jarvis pipeline env build
+        jarvis pipeline append wrf \
+            wrf_location=/output/em_quarter_ss \
+            nprocs=3 ppn=1 engine=bp5
+        jarvis pipeline run
+
+        ls /output/em_quarter_ss/wrfout_d01_* \
+          && echo '=== JARVIS CLUSTER TEST PASSED ==='
+```
+
+Run it:
+
+```bash
+docker compose build
+docker compose up --abort-on-container-exit \
+                 --exit-code-from jarvis-validate \
+                 jarvis-validate
+```
+
+A passing run ends with `=== JARVIS CLUSTER TEST PASSED ===` and leaves
+`wrfout_d01_*` files in `/output/em_quarter_ss/` on the shared volume.
+Tear down with `docker compose down -v`.
+
+---
+
+## 7  Build Notes
 
 - **HDF5 rebuild**: The base image's HDF5 is rebuilt in this Dockerfile to add
   zlib, szip (libaec), and Fortran support — all required by WRF/NetCDF.

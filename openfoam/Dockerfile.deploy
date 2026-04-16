@@ -1,0 +1,45 @@
+# OpenFOAM-dev deployment image — copies pre-built binaries and libraries,
+# avoids recompiling OpenFOAM or ADIOS2.
+# Requires sci-openfoam:latest to exist before building this image.
+#
+# Build:
+#   docker build -t sci-openfoam         -f Dockerfile        .
+#   docker build -t sci-openfoam-deploy  -f Dockerfile.deploy .
+
+FROM sci-openfoam:latest AS builder
+
+# Strip intermediate build objects (.o, .dep, lnInclude) to shrink the copy
+RUN find /opt/OpenFOAM -name "*.o" -delete \
+    && find /opt/OpenFOAM -name "*.dep" -delete \
+    && find /opt/OpenFOAM -name lnInclude -type d -exec rm -rf {} + 2>/dev/null; true
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ openmpi-bin libopenmpi-dev \
+        flex libfl-dev zlib1g libxt6t64 \
+        openssh-server openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-built OpenFOAM tree (binaries, libraries, config, tutorials)
+COPY --from=builder /opt/OpenFOAM /opt/OpenFOAM
+
+# ADIOS2 + HDF5 runtime libraries
+COPY --from=builder /opt/adios2 /opt/adios2
+COPY --from=builder /opt/hdf5   /opt/hdf5
+
+# SSH keys (shared with builder so cluster nodes trust each other)
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+# Source OpenFOAM environment on login
+RUN /bin/bash -c 'echo "source /opt/OpenFOAM/OpenFOAM-dev/etc/bashrc" >> /root/.bashrc'
+
+ENV FOAM_INST_DIR=/opt/OpenFOAM
+ENV ADIOS2_ROOT=/opt/adios2
+ENV HDF5_ROOT=/opt/hdf5
+ENV LD_LIBRARY_PATH=/opt/adios2/lib:/opt/hdf5/lib:${LD_LIBRARY_PATH}
+
+EXPOSE 22
+CMD ["/bin/bash"]
