@@ -176,14 +176,88 @@ auto-decomposes the domain to match `nprocs`.
 
 ---
 
-## 4. Simulated Docker Cluster (Validation)
+## 4. Run Without Jarvis (raw `mpirun`)
+
+If you don't want Jarvis in the loop, the deploy image ships
+`xcompact3d` on `PATH` and the full `examples/` + `tests/` trees under
+`/opt/Incompact3d/`. Pick any `input.i3d` (e.g. the TGV reference input
+used by the validation service), pair it with the baked-in
+`/opt/Incompact3d/adios2_config.xml`, and run under `mpirun` directly.
+
+### 4.1 Single node
+
+```bash
+mkdir -p run
+docker run --rm \
+    -v "$(pwd)/run":/run \
+    sci-xcompact3d-deploy bash -c '
+        mkdir -p /run/tgv && cd /run/tgv &&
+        cp /opt/Incompact3d/tests/TGV-Taylor-Green-vortex/reference_input.i3d input.i3d &&
+        cp /opt/Incompact3d/adios2_config.xml . &&
+        mpirun -np 2 --oversubscribe --allow-run-as-root \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            xcompact3d input.i3d
+    '
+```
+
+Swap `reference_input.i3d` for any case under
+`/opt/Incompact3d/examples/*/input.i3d` (TGV, Channel, Cylinder-wake,
+Mixing-layer, Periodic-hill, Gravity-current, ABL, Wind-Turbine,
+Pipe-Flow, …) or for a file you staged into `/run` yourself. The
+ADIOS2 dataset is written to `data.bp5/` in `cwd`.
+
+### 4.2 Multi-node
+
+Start the deploy image as an `sshd -D` worker on each physical node and
+MPI-launch from the head. SSH host keys are baked into both
+`sci-xcompact3d` and `sci-xcompact3d-deploy` so the containers trust
+each other without additional config.
+
+```bash
+# --- on node worker1 -------------------------------------------------
+docker run -d --rm \
+    --hostname worker1 --network host \
+    -v $(pwd)/run:/run \
+    --name xcompact3d-worker1 sci-xcompact3d-deploy /usr/sbin/sshd -D
+
+# --- on node worker2 -------------------------------------------------
+docker run -d --rm \
+    --hostname worker2 --network host \
+    -v $(pwd)/run:/run \
+    --name xcompact3d-worker2 sci-xcompact3d-deploy /usr/sbin/sshd -D
+
+# --- on the head node ------------------------------------------------
+docker run --rm \
+    --hostname head --network host \
+    -v $(pwd)/run:/run \
+    sci-xcompact3d-deploy bash -c '
+        mkdir -p /run/tgv && cd /run/tgv &&
+        cp /opt/Incompact3d/tests/TGV-Taylor-Green-vortex/reference_input.i3d input.i3d &&
+        cp /opt/Incompact3d/adios2_config.xml . &&
+        mpirun -np 6 --allow-run-as-root \
+            --host $(hostname):2,worker1:2,worker2:2 \
+            --mca btl tcp,self --mca oob_tcp_if_exclude lo \
+            xcompact3d input.i3d
+    '
+```
+
+`/run/` must be a shared path visible on every node (NFS, Lustre, cloud
+FUSE mount, etc.) — every rank reads the same `input.i3d` +
+`adios2_config.xml` and writes the shared `data.bp5` dataset. Match
+`-np` to the total rank count and adjust the `--host host:slots,…` list
+to your physical layout.
+
+---
+
+## 5. Simulated Docker Cluster (Validation)
 
 The `docker-compose.yml` in this directory brings up a head + two worker
-cluster on a single physical host so you can validate sections 2 and 3
+cluster on a single physical host so you can validate sections 2–4
 end-to-end without any real multi-node hardware. The existing `validate`
-and `head`/`worker1`/`worker2` services cover the raw `mpirun` path;
-append the **Jarvis-driven** service below to `docker-compose.yml` under
-the existing `services:` block to validate the Jarvis flow.
+and `head`/`worker1`/`worker2` services cover the raw `mpirun` path
+(section 4); append the **Jarvis-driven** service below to
+`docker-compose.yml` under the existing `services:` block to validate
+the Jarvis flow (sections 2 and 3).
 
 ```yaml
   jarvis-validate:
@@ -248,10 +322,10 @@ once `pkg.py` is parameterised.
 ### Run the validation
 
 ```bash
-# Raw single-node / multi-node checks (no Jarvis).
-docker compose run --rm validate                        # section 2 raw
+# Raw single-node / multi-node checks (no Jarvis — section 4).
+docker compose run --rm validate                        # single-node raw
 docker compose up --abort-on-container-exit \
-                 --exit-code-from head head             # section 3 raw
+                 --exit-code-from head head             # multi-node raw
 
 # Jarvis-driven check.
 docker compose up --abort-on-container-exit \
@@ -273,7 +347,7 @@ docker compose down -v
 
 ---
 
-## 5. Package Configuration Reference
+## 6. Package Configuration Reference
 
 Options exposed by `InCompact3D/pkg.py`:
 
@@ -297,7 +371,7 @@ removes `data.bp5`, the staged XML/input, and the metadata DB via
 
 ---
 
-## 6. Installed Software
+## 7. Installed Software
 
 | Component | Version | Location |
 |-----------|---------|----------|
@@ -308,7 +382,7 @@ removes `data.bp5`, the staged XML/input, and the metadata DB via
 
 ---
 
-## 7. References
+## 8. References
 
 - Jarvis-CD: <https://github.com/grc-iit/jarvis-cd>
 - Jarvis-CD docs: <https://grc.iit.edu/docs/jarvis/jarvis-cd/index>
