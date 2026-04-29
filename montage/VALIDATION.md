@@ -73,3 +73,11 @@ benchmarking suite. See that repo's `summaries/Montage_PHASE6_SUMMARY.txt`.
 |---|---|
 | small (4 FITS, M17) | ✅ SUCCESS, `mosaic.fits` 1.2 MB, ~3 s |
 | medium (16 FITS) | ✅ SUCCESS, `mosaic.fits` 19 MB, ~12 s |
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ✅ verified multi-node (4 SLURM nodes)**
+
+Profiled at 4-node Ares SLURM 2026-04-21 under DataLife: 84 blk_trace JSONs, byte-exact mosaic produced. Per-tile mProjExec is fan-out parallel across the 4 allocated nodes. Archive: `paper_widget/data/multinode_profile/Montage/datalife_2026-04-21_4node/`.

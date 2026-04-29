@@ -118,3 +118,11 @@ Without these, the pipeline segfaults or deadlocks during `tracksingle`
   The logic is the same as the Slurm-validated run — only difference is
   `mpirun` uses SSH transport (openmpi + `--allow-run-as-root`) rather
   than mpich Hydra + Slurm PMI to reach the other hosts.
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ✅ verified multi-node (4 SLURM nodes via dask_mpi)**
+
+Profiled at 4-node Ares SLURM 2026-04-21 under DataLife: 4358 blk_trace JSONs (richest of the set), 151 .nc outputs. dask_mpi distributes workers across the 4 allocated nodes natively. DaYu VFD 15/15 stages + VOL 14/15 (mapfeature blocked at dask 1.17 GiB worker limit — workflow config issue, not profiler). Archives: `paper_widget/data/multinode_profile/PyFLEXTRKR/dayu_2026-04-21_2node_vfd_jsonl_complete/` (canonical) + datalife_2026-04-21_4node/.

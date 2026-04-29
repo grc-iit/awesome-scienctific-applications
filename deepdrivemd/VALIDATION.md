@@ -88,3 +88,11 @@ part of the upstream `hpc_workflows` benchmarking suite. See that repo's
 
 Real MD runs (OpenMM driver, GPU nodes) were not part of the
 bare-metal benchmark scope.
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ✅ verified multi-node (4 SLURM nodes via OpenMM ensemble)**
+
+Phase 6's BOTH_SUCCESS used `/bin/echo` placeholders (framework-only, no science). Replaced with `ensemble_md.py` — direct OpenMM CPU ensemble bypassing RADICAL-EnTK/RabbitMQ which Ares lacks. At 4-node SLURM: 4 tasks × 4 nodes = 16 trajectories, 12 blk_trace JSONs (PDB read + DCD/log writes per node). Archive: `paper_widget/data/multinode_profile/DeepDriveMD-pipeline/datalife_2026-04-21_4node/`. Full DDMD pipeline (with RADICAL-EnTK, ML stage, agent feedback loop) deferred to a GPU-capable cluster — see `paper_widget/notes/deepdrivemd_gpu_port_guide.md`.
