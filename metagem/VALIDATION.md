@@ -82,3 +82,11 @@ See that repo's `summaries/metaGEM_PHASE6_SUMMARY.txt`.
 |---|---|
 | small (3 paired-end samples, 1.8 GB input) | ✅ SUCCESS after 3 self-repairs (config paths, Snakefile `source activate → conda activate`, fastp env creation) — 4 qfilter steps, ~748 s, 1.6 GB output |
 | medium | skipped — small covered the regression surface |
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ✅ verified multi-node (4 SLURM nodes)**
+
+Profiled at 4-node Ares SLURM 2026-04-21 under DataLife (fastp wrapped via Snakefile_datalife so per-binary preload doesn't break conda-activate): 24 blk_trace, 24 qfiltered fastq.gz outputs, 4/4 nodes PASS at 61s. Per-sample fan-out with surgical fastp wrapping. Archive: `paper_widget/data/multinode_profile/metaGEM/datalife_2026-04-21_4node/`.

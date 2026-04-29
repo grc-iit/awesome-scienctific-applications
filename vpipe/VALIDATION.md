@@ -72,3 +72,11 @@ See that repo's `summaries/V-pipe_PHASE6_SUMMARY.txt`.
 |---|---|
 | small (SARS-CoV-2, 2 samples, QA + SNV calling) | ✅ SUCCESS — all 35 Snakemake steps completed, ~1457 s |
 | medium | skipped — small covered the regression surface, medium not attempted |
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ⚠️ verified multi-node 2-node; 4-node partial (snakemake gunzip race at 3/4 replicas)**
+
+Profiled at 2n: 49 blk_trace, 34 artifacts (PASS). At 4n: 98 blk_trace, but 3/4 replicas hit a snakemake gunzip race (per-sample input staging not atomic) — fixable with per-replica input isolation upstream. Multi-node deployment confirmed; gunzip race is unrelated to libmonitor or container packaging. Archives: `paper_widget/data/multinode_profile/V-pipe/datalife_2026-04-21_{2node,4node_partial}/`.

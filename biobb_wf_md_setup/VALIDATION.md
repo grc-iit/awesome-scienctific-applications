@@ -79,3 +79,11 @@ benchmarking suite. See that repo's
 |---|---|
 | small (1AKI) | ✅ SUCCESS, all 5 steps PASS, ~3 s |
 | medium (8 PDBs) | ✅ 3/8 fully solvated; 5 failed at `pdb2gmx` due to non-standard residues with the default AMBER99SB-ILDN force field (expected behaviour, not a bug) |
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ✅ verified multi-node (4 SLURM nodes)**
+
+Profiled at 4-node Ares SLURM 2026-04-21 under DataLife (python3-driver preload only — `gmx` itself SIGSEGVs under libmonitor): 31 blk_trace JSONs, 8/8 PDB systems processed. The 8 systems run as a per-system fan-out across the 4 allocated nodes. Archive: `paper_widget/data/multinode_profile/biobb_wf_md_setup/datalife_2026-04-21_4node/`. `gmx` × libmonitor SIGSEGV remains unresolved on Ares (no core-dump access).

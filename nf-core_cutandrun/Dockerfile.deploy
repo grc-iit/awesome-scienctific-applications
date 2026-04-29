@@ -1,0 +1,35 @@
+# nf-core/cutandrun deployment image — copies the conda env, Nextflow, and the
+# pipeline tree from the builder. Per-process conda envs solve on first run.
+#
+# Build:
+#   docker build -t sci-nf-cutandrun        -f Dockerfile        .
+#   docker build -t sci-nf-cutandrun-deploy -f Dockerfile.deploy .
+
+FROM sci-nf-cutandrun:latest AS builder
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl bash \
+        openjdk-17-jre-headless \
+        openssh-server openssh-client \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/conda          /opt/conda
+COPY --from=builder /opt/cutandrun          /opt/cutandrun
+COPY --from=builder /usr/local/bin/nextflow /usr/local/bin/nextflow
+COPY --from=builder /opt/run_cutandrun.sh  /opt/run_cutandrun.sh
+
+# SSH host keys shared with builder so cluster nodes trust each other.
+COPY --from=builder /etc/ssh   /etc/ssh
+COPY --from=builder /root/.ssh /root/.ssh
+RUN mkdir -p /var/run/sshd
+
+ENV PATH=/opt/conda/bin:${PATH}
+ENV NXF_HOME=/opt/nf-home
+ENV NXF_CONDA_CACHEDIR=/opt/nf-conda-cache
+ENV PYTHONNOUSERSITE=1
+
+EXPOSE 22
+CMD ["/bin/bash"]

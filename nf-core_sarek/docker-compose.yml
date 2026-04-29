@@ -1,0 +1,87 @@
+# nf-core/sarek simulated cluster — build, single-node, multi-node tests.
+#
+# Single-node:
+#   docker compose run --rm validate
+#
+# Multi-node (3-way fan-out across head + 2 workers):
+#   docker compose up --abort-on-container-exit --exit-code-from head head
+
+services:
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    image: sci-nf-sarek-deploy:latest
+    command:
+      - bash
+      - -c
+      - |
+        /opt/run_sarek.sh /output/run && \
+        echo '=== SINGLE-NODE TEST PASSED ==='
+    volumes:
+      - output:/output
+
+  head:
+    image: sci-nf-sarek-deploy:latest
+    hostname: head
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        /usr/sbin/sshd && \
+        /opt/run_sarek.sh /output/head &
+        ssh -o StrictHostKeyChecking=no worker1 \
+          "/opt/run_sarek.sh /output/worker1" &
+        ssh -o StrictHostKeyChecking=no worker2 \
+          "/opt/run_sarek.sh /output/worker2" &
+        wait && \
+        find /output/head    -path '*/outputs/*' -type f -print -quit | grep -q . && \
+        find /output/worker1 -path '*/outputs/*' -type f -print -quit | grep -q . && \
+        find /output/worker2 -path '*/outputs/*' -type f -print -quit | grep -q . && \
+        echo '=== CLUSTER TEST PASSED ==='
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker1:
+    image: sci-nf-sarek-deploy:latest
+    hostname: worker1
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+  worker2:
+    image: sci-nf-sarek-deploy:latest
+    hostname: worker2
+    command: /usr/sbin/sshd -D
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/localhost/22'"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+    volumes:
+      - output:/output
+    networks:
+      - mpi-net
+
+networks:
+  mpi-net:
+
+volumes:
+  output:

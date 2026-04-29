@@ -85,3 +85,11 @@ gives the container packaging a solid recipe to mirror.
 - `docker compose up head`: three-way SSH fan-out across
   `head`/`worker1`/`worker2` on the `mpi-net` overlay; each project
   directory must produce its own diffexp table.
+
+---
+
+## 2026-04-29 multi-node deployment verification update
+
+**Status: ⚠️ verified multi-node 4n (PASS=4/4) but profiling crashed at unrelated bioconda packaging issue**
+
+At 4-node Ares SLURM 2026-04-21: base run EXIT=0 (4/4 nodes pass, 746s) confirms multi-node. Under DataLife: 118 blk_trace JSONs captured (snakemake workflow-graph parse + env yamls + conda tarball reads) before workflow crashes at `bioconda::bioconductor-genomeinfodbdata-1.2.13-r44hdfd78af_0` post-link script — known transient bioconda issue, unrelated to libmonitor. Multi-node deployment is real; trace coverage is limited by where in the DAG the bioconda issue fires. Archive: `paper_widget/data/multinode_profile/rna-seq-star-deseq2/datalife_2026-04-21_4node/`.
